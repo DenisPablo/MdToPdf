@@ -64,9 +64,9 @@ class Program
 
             var files = Directory.GetFiles(directoryPath, "*.md", SearchOption.AllDirectories);
 
-            Console.WriteLine($"✔ Processing directory: {directoryPath}");
+            var options = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
 
-            foreach (var file in files)
+            await Parallel.ForEachAsync(files, options, async (file, cancellationToken) =>
             {
                 try
                 {
@@ -77,7 +77,7 @@ class Program
                 {
                     Console.WriteLine($"✘ Error processing file {file}: {ex.Message}");
                 }
-            }
+            });
         }
         static void Helper()
         {
