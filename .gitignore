@@ -1,0 +1,19 @@
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+*.userosscache
+*.sln.doccache
+
+# Visual Studio
+.vs/
+.vscode/
+
+# Project specifics
+ExportPDF/
+.local-chromium/
+.puppeteer-data/
+
+# OS specific
+Thumbs.db
+.DS_Store
