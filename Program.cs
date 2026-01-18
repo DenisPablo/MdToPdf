@@ -1,4 +1,6 @@
-﻿namespace MdToPdf;
+﻿using System.Diagnostics;
+
+namespace MdToPdf;
 
 class Program
 {
@@ -42,7 +44,7 @@ class Program
 
         static async Task SingleFile(string[] args)
         {
-            var converter = new Converter();
+            await using var converter = new Converter();
 
             if (args.Length < 2) throw new ArgumentException("Missing file path.");
             string filePath = args[1];
@@ -56,7 +58,9 @@ class Program
 
         static async Task AllDirectories(string[] args)
         {
-            var converter = new Converter();
+            var stopwatch = Stopwatch.StartNew();
+
+            await using var converter = new Converter();
 
             string directoryPath = Path.GetFullPath(args.Length < 2 ? Directory.GetCurrentDirectory() : args[1]);
 
@@ -78,6 +82,9 @@ class Program
                     Console.WriteLine($"✘ Error processing file {file}: {ex.Message}");
                 }
             });
+
+            stopwatch.Stop();
+            Console.WriteLine($"✔ Processed all files in {stopwatch.Elapsed.TotalSeconds:F2} seconds.");
         }
         static void Helper()
         {

@@ -11,9 +11,12 @@ using PuppeteerSharp.Media;
 
 namespace MdToPdf;
 
-partial class Converter
+partial class Converter : IAsyncDisposable
 {
     private readonly MarkdownPipeline _pipeline;
+    private IBrowser? _browser;
+    private string? _detectedAttachmentsPath;
+    private string? _vaultRoot;
 
     public Converter()
     {
@@ -21,6 +24,20 @@ partial class Converter
         .UseAdvancedExtensions()
         .UseYamlFrontMatter()
         .Build();
+    }
+
+    private async Task EnsureBrowserReady()
+    {
+        if (_browser == null)
+        {
+            var browserFetcher = new BrowserFetcher();
+            await browserFetcher.DownloadAsync();
+
+            _browser = await Puppeteer.LaunchAsync(new LaunchOptions
+            {
+                Headless = true,
+            });
+        }
     }
 
     public async Task ConvertFile(string filePath, string outputDir)
@@ -125,15 +142,9 @@ partial class Converter
 
     private async Task GeneratePdf(string html, string destination)
     {
-        var browserFetcher = new BrowserFetcher();
-        await browserFetcher.DownloadAsync();
+        await EnsureBrowserReady();
 
-        await using var browser = await Puppeteer.LaunchAsync(new LaunchOptions
-        {
-            Headless = true,
-        });
-
-        await using var page = await browser.NewPageAsync();
+        await using var page = await _browser!.NewPageAsync();
 
         await page.SetContentAsync(html, new NavigationOptions
         {
@@ -153,6 +164,8 @@ partial class Converter
             }
 
         });
+
+        await page.CloseAsync();
     }
 
     [GeneratedRegex(@"!\[\[(.*?)\]\]")]
@@ -194,10 +207,10 @@ partial class Converter
 
     /// <summary>
     /// Finds an image file by name. First checks if it's a direct path,
-    /// then searches in the same directory, then searches recursively
-    /// upward to find the Obsidian vault root and searches the entire vault.
+    /// then searches in the same directory, then uses cached paths if available,
+    /// then searches recursively upward to find the Obsidian vault root and searches the entire vault.
     /// </summary>
-    private static string? FindImageFile(string imageName, string startDir)
+    private string? FindImageFile(string imageName, string startDir)
     {
         // If it's already a full path and exists, use it
         if (Path.IsPathRooted(imageName) && File.Exists(imageName))
@@ -208,16 +221,72 @@ partial class Converter
         if (File.Exists(directPath))
             return directPath;
 
-        // Find the Obsidian vault root (look for .obsidian folder)
-        string? vaultRoot = FindVaultRoot(startDir);
-        if (vaultRoot != null)
+        // Check in the cached attachments path if available
+        if (_detectedAttachmentsPath != null)
         {
-            // Search recursively in the entire vault
+            string cachedPath = Path.Combine(_detectedAttachmentsPath, Path.GetFileName(imageName));
+            if (File.Exists(cachedPath))
+                return cachedPath;
+
+            // Also try searching recursively in the attachments folder
             try
             {
-                var files = Directory.GetFiles(vaultRoot, Path.GetFileName(imageName), SearchOption.AllDirectories);
+                var files = Directory.GetFiles(_detectedAttachmentsPath, Path.GetFileName(imageName), SearchOption.AllDirectories);
                 if (files.Length > 0)
                     return files[0];
+            }
+            catch { }
+        }
+
+        // Find the Obsidian vault root (look for .obsidian folder) - use cache if available
+        if (_vaultRoot == null)
+        {
+            _vaultRoot = FindVaultRoot(startDir);
+        }
+
+        if (_vaultRoot != null)
+        {
+            // First, try to detect common attachment folders if not already detected
+            if (_detectedAttachmentsPath == null)
+            {
+                string[] commonAttachmentFolders = { "attachments", "assets", "Attachments", "Assets", "_attachments", "_assets" };
+                foreach (var folderName in commonAttachmentFolders)
+                {
+                    string testPath = Path.Combine(_vaultRoot, folderName);
+                    if (Directory.Exists(testPath))
+                    {
+                        _detectedAttachmentsPath = testPath;
+                        // Try to find the image in this folder
+                        string cachedPath = Path.Combine(_detectedAttachmentsPath, Path.GetFileName(imageName));
+                        if (File.Exists(cachedPath))
+                            return cachedPath;
+
+                        try
+                        {
+                            var files = Directory.GetFiles(_detectedAttachmentsPath, Path.GetFileName(imageName), SearchOption.AllDirectories);
+                            if (files.Length > 0)
+                                return files[0];
+                        }
+                        catch { }
+                    }
+                }
+            }
+
+            // Search recursively in the entire vault as last resort
+            try
+            {
+                var files = Directory.GetFiles(_vaultRoot, Path.GetFileName(imageName), SearchOption.AllDirectories);
+                if (files.Length > 0)
+                {
+                    // Cache the parent directory if it looks like an attachments folder
+                    string parentDir = Path.GetDirectoryName(files[0]) ?? "";
+                    string parentName = Path.GetFileName(parentDir).ToLowerInvariant();
+                    if (parentName.Contains("attachment") || parentName.Contains("asset"))
+                    {
+                        _detectedAttachmentsPath = parentDir;
+                    }
+                    return files[0];
+                }
             }
             catch { }
         }
@@ -253,5 +322,13 @@ partial class Converter
             currentDir = Path.GetDirectoryName(currentDir);
         }
         return null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_browser != null)
+        {
+            await _browser.DisposeAsync();
+        }
     }
 }
